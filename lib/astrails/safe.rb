@@ -1,6 +1,6 @@
 require "astrails/safe/version"
 
-require "aws/s3"
+require "aws-sdk"
 require "cloudfiles"
 require 'net/sftp'
 require 'net/ftp'

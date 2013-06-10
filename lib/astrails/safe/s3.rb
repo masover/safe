@@ -17,9 +17,6 @@ module Astrails
         # FIXME: user friendly error here :)
         raise RuntimeError, "pipe-streaming not supported for S3." unless @backup.path
 
-        # needed in cleanup even on dry run
-        AWS::S3::Base.establish_connection!(:access_key_id => key, :secret_access_key => secret, :use_ssl => true) unless local_only?
-
         puts "Uploading #{bucket}:#{full_path}" if verbose? || dry_run?
         unless dry_run? || local_only?
           if File.stat(@backup.path).size > MAX_S3_FILE_SIZE
@@ -27,9 +24,8 @@ module Astrails
             return
           end
           benchmark = Benchmark.realtime do
-            AWS::S3::Bucket.create(bucket) unless bucket_exists?(bucket)
             File.open(@backup.path) do |file|
-              AWS::S3::S3Object.store(full_path, file, bucket)
+              remote_bucket.objects.create(full_path, :data => file)
             end
           end
           puts "...done" if verbose?
@@ -43,17 +39,23 @@ module Astrails
         return unless keep = config[:keep, :s3]
 
         puts "listing files: #{bucket}:#{base}*" if verbose?
-        files = AWS::S3::Bucket.objects(bucket, :prefix => base, :max_keys => keep * 2)
+        files = remote_bucket.objects.with_prefix(:prefix => base)
         puts files.collect {|x| x.key} if verbose?
 
-        files = files.
-          collect {|x| x.key}.
-          sort
+        files = files.sort { |x,y| x.key <=> y.key }
 
         cleanup_with_limit(files, keep) do |f|
           puts "removing s3 file #{bucket}:#{f}" if dry_run? || verbose?
-          AWS::S3::Bucket.objects(bucket, :prefix => f)[0].delete unless dry_run? || local_only?
+          f.delete unless dry_run? || local_only?
         end
+      end
+
+      def remote_bucket
+        unless @remote_bucket
+          s3 = AWS::S3.new(:access_key_id => key, :secret_access_key => secret)
+          @remote_bucket = s3.buckets.create(bucket)
+        end
+        @remote_bucket
       end
 
       def bucket
@@ -66,14 +68,6 @@ module Astrails
 
       def secret
         config[:s3, :secret]
-      end
-
-      private
-      
-      def bucket_exists?(bucket)
-        true if AWS::S3::Bucket.find(bucket)
-      rescue AWS::S3::NoSuchBucket
-        false
       end
     end
   end
